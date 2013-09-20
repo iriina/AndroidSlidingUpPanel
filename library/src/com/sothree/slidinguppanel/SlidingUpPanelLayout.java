@@ -73,6 +73,8 @@ public class SlidingUpPanelLayout extends ViewGroup {
      */
     private boolean mCanSlide;
 
+    private boolean mDrawScrim = true;
+
     /**
      * If provided, the panel can be dragged by only this view. Otherwise, the entire panel can be
      * used for dragging.
@@ -109,6 +111,7 @@ public class SlidingUpPanelLayout extends ViewGroup {
     private float mInitialMotionX;
     private float mInitialMotionY;
     private boolean mDragViewHit;
+    private float mAnchorPoint = 0.f;
 
     private PanelSlideListener mPanelSlideListener;
 
@@ -147,6 +150,8 @@ public class SlidingUpPanelLayout extends ViewGroup {
          * @param panel The child view that was slid to a expanded position
          */
         public void onPanelExpanded(View panel);
+
+        public void onPanelAnchored(View panel);
     }
 
     /**
@@ -162,6 +167,9 @@ public class SlidingUpPanelLayout extends ViewGroup {
         }
         @Override
         public void onPanelExpanded(View panel) {
+        }
+        @Override
+        public void onPanelAnchored(View panel) {
         }
     }
 
@@ -238,6 +246,10 @@ public class SlidingUpPanelLayout extends ViewGroup {
         mDragView = dragView;
     }
 
+    public void setAnchorPoint(float anchorPoint) {
+        mAnchorPoint = anchorPoint;
+    }
+
     /**
      * Set the shadow for the sliding panel
      *
@@ -262,6 +274,13 @@ public class SlidingUpPanelLayout extends ViewGroup {
     void dispatchOnPanelCollapsed(View panel) {
         if (mPanelSlideListener != null) {
             mPanelSlideListener.onPanelCollapsed(panel);
+        }
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+    }
+
+    void dispatchOnPanelAnchored(View panel) {
+        if (mPanelSlideListener != null) {
+            mPanelSlideListener.onPanelAnchored(panel);
         }
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
     }
@@ -566,8 +585,8 @@ public class SlidingUpPanelLayout extends ViewGroup {
                         isDragViewHit((int) x, (int) y)) {
                     View v = mDragView != null ? mDragView : mSlideableView;
                     v.playSoundEffect(SoundEffectConstants.CLICK);
-                    if (!isExpanded()) {
-                        expandPane(mSlideableView, 0);
+                    if (!isExpanded() && !isAnchored()) {
+                        expandPane(mAnchorPoint);
                     } else {
                         collapsePane();
                     }
@@ -580,8 +599,8 @@ public class SlidingUpPanelLayout extends ViewGroup {
         return wantTouchEvents;
     }
 
-    private boolean expandPane(View pane, int initialVelocity) {
-        if (mFirstLayout || smoothSlideTo(0.f, initialVelocity)) {
+    private boolean expandPane(View pane, int initialVelocity, float mSlideOffset) {
+        if (mFirstLayout || smoothSlideTo(mSlideOffset, initialVelocity)) {
             mPreservedExpandedState = true;
             return true;
         }
@@ -613,10 +632,14 @@ public class SlidingUpPanelLayout extends ViewGroup {
      * @return true if the pane was slideable and is now expanded/in the process of expading
      */
     public boolean expandPane() {
+        return expandPane(0);
+    }
+
+    public boolean expandPane(float mSlideOffset) {
         if (!isPaneVisible()) {
             showPane();
         }
-        return expandPane(mSlideableView, 0);
+        return expandPane(mSlideableView, 0, mSlideOffset);
     }
 
     /**
@@ -629,6 +652,13 @@ public class SlidingUpPanelLayout extends ViewGroup {
                 || !mFirstLayout && mCanSlide && mSlideOffset == 0;
     }
 
+    public boolean isAnchored() {
+        int anchoredTop = (int)(mAnchorPoint*mSlideRange);
+        return mFirstLayout && mPreservedExpandedState
+                || !mFirstLayout && mCanSlide
+                && Math.abs(mSlideOffset - (float)anchoredTop/(float)mSlideRange) < 0.1;
+    }
+
     /**
      * Check if the content in this layout cannot fully fit side by side and therefore
      * the content pane can be slid back and forth.
@@ -637,6 +667,10 @@ public class SlidingUpPanelLayout extends ViewGroup {
      */
     public boolean isSlideable() {
         return mCanSlide;
+    }
+
+    public void drawScrim(boolean draw) {
+        mDrawScrim = draw;
     }
 
     public boolean isPaneVisible() {
@@ -691,7 +725,7 @@ public class SlidingUpPanelLayout extends ViewGroup {
         result = super.drawChild(canvas, child, drawingTime);
         canvas.restoreToCount(save);
 
-        if (drawScrim) {
+        if (drawScrim && mDrawScrim) {
             final int baseAlpha = (mCoveredFadeColor & 0xff000000) >>> 24;
             final int imag = (int) (baseAlpha * (1 - mSlideOffset));
             final int color = imag << 24 | (mCoveredFadeColor & 0xffffff);
@@ -852,6 +886,10 @@ public class SlidingUpPanelLayout extends ViewGroup {
                     updateObscuredViewVisibility();
                     dispatchOnPanelExpanded(mSlideableView);
                     mPreservedExpandedState = true;
+                } else if (isAnchored()) {
+                    updateObscuredViewVisibility();
+                    dispatchOnPanelAnchored(mSlideableView);
+                    mPreservedExpandedState = true;
                 } else {
                     dispatchOnPanelCollapsed(mSlideableView);
                     mPreservedExpandedState = false;
@@ -876,7 +914,10 @@ public class SlidingUpPanelLayout extends ViewGroup {
             int top = getPaddingTop();
             if (yvel > 0 || (yvel == 0 && mSlideOffset > 0.5f)) {
                 top += mSlideRange;
+            } else if (yvel > 0 || (yvel == 0 && mSlideOffset > mAnchorPoint)) {
+                top += mSlideRange * mAnchorPoint;
             }
+
             mDragHelper.settleCapturedViewAt(releasedChild.getLeft(), top);
             invalidate();
         }
@@ -900,7 +941,7 @@ public class SlidingUpPanelLayout extends ViewGroup {
 
     public static class LayoutParams extends ViewGroup.MarginLayoutParams {
         private static final int[] ATTRS = new int[] {
-            android.R.attr.layout_weight
+                android.R.attr.layout_weight
         };
 
         /**
